@@ -1,0 +1,14 @@
+{
+  "FpvVehicleName": "Pixhawk",
+  "LocalHostIp": "127.0.0.1",
+  "RpcEnabled": true,
+  "Pixhawk": {
+    "SerialBaudRate": 115200,
+    "SerialPort": "*",
+    "UseSerial": false,
+    "UdpIp": "127.0.0.1",
+    "UdpPort": 14560,
+    "SitlIp": "127.0.0.1",
+    "SitlPort": 14556
+  }
+}
