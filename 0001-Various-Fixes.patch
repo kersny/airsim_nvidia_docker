@@ -1,0 +1,335 @@
+From cce9b103e61c87aa785154c837eafdb8723abf68 Mon Sep 17 00:00:00 2001
+From: Kerry Snyder <kerry.snyder@gmail.com>
+Date: Mon, 29 May 2017 11:35:05 -0400
+Subject: [PATCH] Various Fixes
+
+---
+ AirLib/include/sensors/SensorCollection.hpp        |  3 +-
+ .../sensors/ground_truth/GroundTruthSensor.hpp     | 83 ++++++++++++++++++++++
+ AirLib/include/vehicles/MultiRotorParams.hpp       |  4 ++
+ AirLib/src/controllers/MavLinkDroneController.cpp  | 44 ++++++++++++
+ Unreal/Plugins/AirSim/Source/RecordingThread.cpp   | 10 +--
+ .../Plugins/AirSim/Source/SimMode/SimModeBase.cpp  | 34 ++++-----
+ Unreal/Plugins/AirSim/Source/SimMode/SimModeBase.h |  2 +-
+ .../Source/SimMode/SimModeWorldMultiRotor.cpp      |  2 +-
+ 8 files changed, 157 insertions(+), 25 deletions(-)
+ create mode 100644 AirLib/include/sensors/ground_truth/GroundTruthSensor.hpp
+
+diff --git a/AirLib/include/sensors/SensorCollection.hpp b/AirLib/include/sensors/SensorCollection.hpp
+index 9d3d257..339c01c 100644
+--- a/AirLib/include/sensors/SensorCollection.hpp
++++ b/AirLib/include/sensors/SensorCollection.hpp
+@@ -18,7 +18,8 @@ public: //types
+         Barometer = 1,
+         Imu = 2,
+         Gps = 3,
+-        Magnetometer = 4
++        Magnetometer = 4,
++        GroundTruth = 5,
+     };
+     typedef SensorBase* SensorBasePtr;
+ public:
+diff --git a/AirLib/include/sensors/ground_truth/GroundTruthSensor.hpp b/AirLib/include/sensors/ground_truth/GroundTruthSensor.hpp
+new file mode 100644
+index 0000000..8de5e28
+--- /dev/null
++++ b/AirLib/include/sensors/ground_truth/GroundTruthSensor.hpp
+@@ -0,0 +1,83 @@
++// Licensed under the MIT License.
++
++#ifndef msr_airlib_GroundTruthSensor_hpp
++#define msr_airlib_GroundTruthSensor_hpp
++
++
++#include "sensors/SensorBase.hpp"
++#include "common/CommonStructs.hpp"
++
++
++namespace msr { namespace airlib {
++
++class GroundTruthSensor  : public SensorBase {
++public: //types
++    struct Output {	//structure is same as ROS IMU message
++        EIGEN_MAKE_ALIGNED_OPERATOR_NEW
++        Quaternionr orientation;
++        Vector3r angular_velocity;
++        GeoPoint position;
++        Vector3r velocity;
++        Vector3r acceleration;
++    };
++
++
++public:
++    virtual void reportState(StateReporter& reporter) override
++    {
++        //call base
++        UpdatableObject::reportState(reporter);
++
++        reporter.writeValue("GT-Ang", output_.angular_velocity);
++        reporter.writeValue("GT-Pos", output_.position);
++        reporter.writeValue("GT-Vel", output_.velocity);
++        reporter.writeValue("GT-Acc", output_.acceleration);
++    }
++
++    const Output& getOutput() const
++    {
++        return output_;
++    }
++
++    //*** Start: UpdatableState implementation ***//
++    virtual void reset() override
++    {
++        updateOutput();
++    }
++
++    virtual void update() override
++    {
++        updateOutput();
++    }
++    //*** End: UpdatableState implementation ***//
++
++protected:
++    void setOutput(const Output& output)
++    {
++        output_ = output;
++    }
++
++
++private: 
++    void updateOutput()
++    {
++        Output output;
++        const GroundTruth& ground_truth = getGroundTruth();
++
++        output.orientation = ground_truth.kinematics->pose.orientation;
++        output.angular_velocity = ground_truth.kinematics->twist.angular;
++        output.position = ground_truth.environment->getState().geo_point;
++        output.velocity = ground_truth.kinematics->twist.linear;
++        output.acceleration = ground_truth.kinematics->accelerations.linear - ground_truth.environment->getState().gravity;
++
++        output.acceleration = VectorMath::transformToBodyFrame(output.acceleration, 
++            ground_truth.kinematics->pose.orientation, true);
++
++        setOutput(output);
++    }
++    Output output_;
++};
++
++
++}} //namespace
++#endif 
+diff --git a/AirLib/include/vehicles/MultiRotorParams.hpp b/AirLib/include/vehicles/MultiRotorParams.hpp
+index 7affed7..64fda77 100644
+--- a/AirLib/include/vehicles/MultiRotorParams.hpp
++++ b/AirLib/include/vehicles/MultiRotorParams.hpp
+@@ -14,6 +14,7 @@
+ #include "sensors/imu/ImuSimple.hpp"
+ #include "sensors/gps/GpsSimple.hpp"
+ #include "sensors/magnetometer/MagnetometerSimple.hpp"
++#include "sensors/ground_truth/GroundTruthSensor.hpp"
+ 
+ //below includes are because of setPhysicsGroundTruth methog
+ #include "physics/Environment.hpp"
+@@ -41,6 +42,7 @@ public: //types
+         bool magnetometer = true;
+         bool gps = true;
+         bool barometer = true;
++        bool ground_truth = true;
+     };
+ 
+     //TODO: support arbitrary shapes for cor body via interfaces
+@@ -231,6 +233,8 @@ protected: //static utility functions for derived classes to use
+             sensors.insert(createSensor<GpsSimple>(sensor_storage), SensorCollection::SensorType::Gps);
+         if (enabled_sensors.barometer)
+             sensors.insert(createSensor<BarometerSimple>(sensor_storage), SensorCollection::SensorType::Barometer);
++        if (enabled_sensors.ground_truth)
++            sensors.insert(createSensor<GroundTruthSensor>(sensor_storage), SensorCollection::SensorType::GroundTruth);
+     }
+ 
+     template<typename SensorClass>
+diff --git a/AirLib/src/controllers/MavLinkDroneController.cpp b/AirLib/src/controllers/MavLinkDroneController.cpp
+index e675ed5..eff4d7b 100644
+--- a/AirLib/src/controllers/MavLinkDroneController.cpp
++++ b/AirLib/src/controllers/MavLinkDroneController.cpp
+@@ -24,6 +24,7 @@
+ #include "sensors/imu/ImuBase.hpp"
+ #include "sensors/gps/GpsBase.hpp"
+ #include "sensors/magnetometer/MagnetometerBase.hpp"
++#include "sensors/ground_truth/GroundTruthSensor.hpp"
+ 
+ namespace msr { namespace airlib {
+ 
+@@ -451,6 +452,42 @@ struct MavLinkDroneController::impl {
+         }
+         //else ignore message
+     }
++    void sendHILState(const Quaternionr& orientation, const Vector3r& angular_velocity, const GeoPoint& geo_point, const Vector3r& velocity, float ind_airspeed, float true_airspeed, const Vector3r& acceleration) {
++        if (!is_simulation_mode_)
++            throw std::logic_error("Attempt to send simulated sensor messages while not in simulation mode");
++
++        mavlinkcom::MavLinkHilStateQuaternion hil_state;
++        hil_state.time_usec = static_cast<uint64_t>(Utils::getTimeSinceEpochNanos() / 1000.0);
++
++        hil_state.attitude_quaternion[0] = orientation.w();
++        hil_state.attitude_quaternion[1] = orientation.x();
++        hil_state.attitude_quaternion[2] = orientation.y();
++        hil_state.attitude_quaternion[3] = orientation.z();
++
++        hil_state.rollspeed = angular_velocity.x();
++        hil_state.pitchspeed = angular_velocity.y();
++        hil_state.yawspeed = angular_velocity.z();
++
++        hil_state.lat = static_cast<int32_t>(geo_point.latitude * 1E7);
++        hil_state.lon = static_cast<int32_t>(geo_point.longitude* 1E7);
++        hil_state.alt = static_cast<int32_t>(geo_point.altitude * 1000);
++
++        hil_state.vx = static_cast<int16_t>(velocity.x() * 100);
++        hil_state.vy = static_cast<int16_t>(velocity.y() * 100);
++        hil_state.vz = static_cast<int16_t>(velocity.z() * 100);
++
++        hil_state.ind_airspeed = static_cast<uint16_t>(ind_airspeed * 100);
++        hil_state.true_airspeed = static_cast<uint16_t>(true_airspeed * 100);
++
++        hil_state.xacc = static_cast<int16_t>(acceleration.x() * 1000);
++        hil_state.yacc = static_cast<int16_t>(acceleration.y() * 1000);
++        hil_state.zacc = static_cast<int16_t>(acceleration.z() * 1000);
++
++        if (hil_node_ != nullptr) {
++            hil_node_->sendMessage(hil_state);
++        }
++    }
++
+ 
+     void sendHILSensor(const Vector3r& acceleration, const Vector3r& gyro, const Vector3r& mag, float abs_pressure, float pressure_alt)
+     {
+@@ -564,12 +601,19 @@ struct MavLinkDroneController::impl {
+     {
+         return static_cast<const GpsBase*>(sensors_->getByType(SensorCollection::SensorType::Gps));
+     }
++    const GroundTruthSensor* getGroundTruth()
++    {
++        return static_cast<const GroundTruthSensor*>(sensors_->getByType(SensorCollection::SensorType::GroundTruth));
++    }
+ 
+     void update()
+     {
+         if (sensors_ == nullptr || connection_ == nullptr || !connection_->isOpen())
+             return;
+ 
++        const auto& gt_output = getGroundTruth()->getOutput();
++        sendHILState(gt_output.orientation, gt_output.angular_velocity, gt_output.position, gt_output.velocity, 0.0, 0.0, gt_output.acceleration);
++
+         //send sensor updates
+         const auto& imu_output = getImu()->getOutput();
+         const auto& mag_output = getMagnetometer()->getOutput();
+diff --git a/Unreal/Plugins/AirSim/Source/RecordingThread.cpp b/Unreal/Plugins/AirSim/Source/RecordingThread.cpp
+index a28beaa..69aa204 100644
+--- a/Unreal/Plugins/AirSim/Source/RecordingThread.cpp
++++ b/Unreal/Plugins/AirSim/Source/RecordingThread.cpp
+@@ -130,10 +130,10 @@ void FRecordingThread::SaveImage()
+ 
+             uint64_t timestamp_millis = static_cast<uint64_t>(clock_->nowNanos() / 1.0E6);
+ 
+-            GameThread->record_file << timestamp_millis << "\t";
+-            GameThread->record_file << kinematics.pose.position.x() << "\t" << kinematics.pose.position.y() << "\t" << kinematics.pose.position.z() << "\t";
+-            GameThread->record_file << kinematics.pose.orientation.w() << "\t" << kinematics.pose.orientation.x() << "\t" << kinematics.pose.orientation.y() << "\t" << kinematics.pose.orientation.z() << "\t";
+-            GameThread->record_file << "\n";
++            //GameThread->record_file << timestamp_millis << "\t";
++            //GameThread->record_file << kinematics.pose.position.x() << "\t" << kinematics.pose.position.y() << "\t" << kinematics.pose.position.z() << "\t";
++            //GameThread->record_file << kinematics.pose.orientation.w() << "\t" << kinematics.pose.orientation.x() << "\t" << kinematics.pose.orientation.y() << "\t" << kinematics.pose.orientation.z() << "\t";
++            //GameThread->record_file << "\n";
+ 
+             UAirBlueprintLib::LogMessage(TEXT("Screenshot saved to:"), filePath, LogDebugLevel::Success);
+             imagesSaved++;
+@@ -172,4 +172,4 @@ void FRecordingThread::Shutdown()
+         delete Runnable;
+         Runnable = NULL;
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/Unreal/Plugins/AirSim/Source/SimMode/SimModeBase.cpp b/Unreal/Plugins/AirSim/Source/SimMode/SimModeBase.cpp
+index 73dfe2e..7de5d76 100644
+--- a/Unreal/Plugins/AirSim/Source/SimMode/SimModeBase.cpp
++++ b/Unreal/Plugins/AirSim/Source/SimMode/SimModeBase.cpp
+@@ -103,21 +103,21 @@ bool ASimModeBase::isRecording()
+ 
+ void ASimModeBase::startRecording()
+ {
+-    if (record_file.is_open()) {
+-        record_file.close();
+-        UAirBlueprintLib::LogMessage(TEXT("Recording Error"), TEXT("File was already open"), LogDebugLevel::Failure);
+-    }
++    //if (record_file.is_open()) {
++    //    record_file.close();
++    //    UAirBlueprintLib::LogMessage(TEXT("Recording Error"), TEXT("File was already open"), LogDebugLevel::Failure);
++    //}
+ 
+-    std::string fullPath = common_utils::FileSystem::getLogFileNamePath(record_filename, "", ".txt", true);
+-    common_utils::FileSystem::createTextFile(fullPath, record_file);
++    //std::string fullPath = common_utils::FileSystem::getLogFileNamePath(record_filename, "", ".txt", true);
++    //common_utils::FileSystem::createTextFile(fullPath, record_file);
+ 
+-    if (record_file.is_open()) {
++    //if (record_file.is_open()) {
+         is_recording = true;
+ 
+-        UAirBlueprintLib::LogMessage(TEXT("Recording"), TEXT("Started"), LogDebugLevel::Success);
+-    }
+-    else
+-        UAirBlueprintLib::LogMessage("Error creating log file", fullPath.c_str(), LogDebugLevel::Failure);
++    //    UAirBlueprintLib::LogMessage(TEXT("Recording"), TEXT("Started"), LogDebugLevel::Success);
++    //}
++    //else
++    //    UAirBlueprintLib::LogMessage("Error creating log file", fullPath.c_str(), LogDebugLevel::Failure);
+ }
+ 
+ bool ASimModeBase::toggleRecording()
+@@ -133,11 +133,11 @@ bool ASimModeBase::toggleRecording()
+ void ASimModeBase::stopRecording()
+ {
+     is_recording = false;
+-    if (!record_file.is_open()) {
+-        UAirBlueprintLib::LogMessage(TEXT("Recording Error"), TEXT("File was not open"), LogDebugLevel::Failure);
+-    }
+-    else
+-        record_file.close();
++    //if (!record_file.is_open()) {
++    //    UAirBlueprintLib::LogMessage(TEXT("Recording Error"), TEXT("File was not open"), LogDebugLevel::Failure);
++    //}
++    //else
++    //    record_file.close();
+     
+     UAirBlueprintLib::LogMessage(TEXT("Recording"), TEXT("Stopped"), LogDebugLevel::Success);
+-}
+\ No newline at end of file
++}
+diff --git a/Unreal/Plugins/AirSim/Source/SimMode/SimModeBase.h b/Unreal/Plugins/AirSim/Source/SimMode/SimModeBase.h
+index 01e96d2..7cdc79c 100644
+--- a/Unreal/Plugins/AirSim/Source/SimMode/SimModeBase.h
++++ b/Unreal/Plugins/AirSim/Source/SimMode/SimModeBase.h
+@@ -34,7 +34,7 @@ public:
+     virtual bool isRecording();
+     FString getRecordingPath();
+ 
+-    std::ofstream record_file;
++    //std::ofstream record_file;
+     std::string record_filename = "airsim_rec";    
+ protected:
+     virtual void setupInputBindings();
+diff --git a/Unreal/Plugins/AirSim/Source/SimMode/SimModeWorldMultiRotor.cpp b/Unreal/Plugins/AirSim/Source/SimMode/SimModeWorldMultiRotor.cpp
+index a52a539..e5126d7 100644
+--- a/Unreal/Plugins/AirSim/Source/SimMode/SimModeWorldMultiRotor.cpp
++++ b/Unreal/Plugins/AirSim/Source/SimMode/SimModeWorldMultiRotor.cpp
+@@ -136,7 +136,7 @@ void ASimModeWorldMultiRotor::Tick(float DeltaSeconds)
+             }
+         }
+ 
+-        if (isRecording() && record_file.is_open()) {
++        if (isRecording()/* && record_file.is_open()*/) {
+             if (!isLoggingStarted)
+             {
+                 FString imagePathPrefix = common_utils::FileSystem::getLogFileNamePath("img_", "", "", false).c_str();
+-- 
+2.7.4
+

@@ -6,8 +6,8 @@ docker run -it \
      --device="/dev/nvidia0:/dev/nvidia0" \
      --device="/dev/nvidiactl:/dev/nvidiactl" \
      --device="/dev/nvidia-modeset:/dev/nvidia-modeset" \
-     --device="/dev/nvidia-uvm:/dev/nvidia-uvm" \
      --volume="/tmp/.X11-unix:/tmp/.X11-unix:rw" \
      --volume="$PWD/Documents:/home/unreal/Documents" \
      --cap-add sys_nice \
-     airsim_nvidia
+     --net=host \
+     airsim_nvidia /home/unreal/Documents/launch.sh
