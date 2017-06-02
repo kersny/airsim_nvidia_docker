@@ -8,7 +8,7 @@ This setup is in no way ideal, and requires some hacky patches, but:
 Prerequisites:
 
 - docker (tested with 17.03.1-ce)
-- NVIDIA-Linux-x86_64-375.39.run (from NVIDIA, probably can be changed to match your nvidia driver version)
+- NVIDIA-Linux-x86_64-381.22.run (from NVIDIA, probably can be changed to match your nvidia driver version)
 - UnrealEngine-4.15.zip (Requires signup with Epic Games, downloaded from github)
 
 Build/Run:
