@@ -28,24 +28,23 @@ RUN echo "unreal ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 USER unreal
 
 RUN sudo apt-get update && sudo apt-get install -y libnss3 libpangocairo-1.0-0 libgconf-2-4 libxi-dev libxcursor-dev libxss-dev libxcomposite-dev libasound-dev libatk1.0-dev libxrandr-dev libxtst-dev libopenal-dev && sudo rm -rf /var/lib/apt/lists/*
-COPY UnrealEngine-4.15.zip /home/unreal/UnrealEngine-4.15.zip
-RUN cd ~/ && unzip UnrealEngine-4.15.zip && rm UnrealEngine-4.15.zip
-COPY ltc4.patch /home/unreal/ltc4.patch
-RUN cd ~/UnrealEngine-4.15/Engine/Source/Programs/UnrealBuildTool/Linux && patch -p0 < ~/ltc4.patch
-RUN sudo apt-get update && cd ~/UnrealEngine-4.15 && ./Setup.sh && ./GenerateProjectFiles.sh
+COPY UnrealEngine-4.16.2-release.zip /home/unreal/UnrealEngine-4.16.2-release.zip
+RUN cd ~/ && unzip UnrealEngine-4.16.2-release.zip && rm UnrealEngine-4.16.2-release.zip
+RUN sudo apt-get update && cd ~/UnrealEngine-4.16.2-release && ./Setup.sh && ./GenerateProjectFiles.sh
 
-RUN cd ~/ && git clone https://github.com/Microsoft/AirSim.git && cd AirSim && git checkout f78f11774055fa7381c9cdf6dc08265c93864226 && cd cmake && sudo bash ./getlibcxx.sh; exit 0
+RUN cd ~/ && git clone https://github.com/Microsoft/AirSim.git && cd AirSim && git checkout b9a978de563dc0c16ffe7a2dd3e40916b7fe0c2b && cd cmake && sudo bash ./getlibcxx.sh; exit 0
 
-COPY 0001-Various-Fixes.patch /home/unreal/0001-Various-Fixes.patch
-RUN cd ~/AirSim && git apply /home/unreal/0001-Various-Fixes.patch
+RUN cd ~/AirSim/Unreal/Plugins/AirSim/Source && cp AirSim.Build.cs AirSim.Build.4.15.cs && cp AirSim.Build.4.16.cs AirSim.Build.cs
+COPY rpc_patch.patch /home/unreal/rpc_patch.patch
+RUN cd ~/AirSim && ./setup.sh
+RUN cd ~/AirSim/external/rpclib && patch -p1 < /home/unreal/rpc_patch.patch
 RUN cd ~/AirSim && ./build.sh
-RUN cd ~/AirSim && rsync -t -r Unreal/Plugins Unreal/Environments/Blocks
 ENV EIGEN_ROOT /home/unreal/AirSim/eigen
 
-RUN cd ~/UnrealEngine-4.15 && ./GenerateProjectFiles.sh -project="/home/unreal/AirSim/Unreal/Environments/Blocks/Blocks.uproject" -game -engine
+RUN cd ~/UnrealEngine-4.16.2-release && ./GenerateProjectFiles.sh -project="/home/unreal/AirSim/Unreal/Environments/Blocks/Blocks.uproject" -game -engine
 
 RUN mkdir -p /home/unreal/out
-RUN cd ~/AirSim/Unreal/Environments/Blocks && ~/UnrealEngine-4.15/Engine/Build/BatchFiles/RunUAT.sh BuildCookRun -project="$PWD/Blocks.uproject" -platform=Linux -clientconfig=Shipping -cook -allmaps -build -stage -pak -archive -archivedirectory="/home/unreal/out"
+RUN cd ~/AirSim/Unreal/Environments/Blocks && ~/UnrealEngine-4.16.2-release/Engine/Build/BatchFiles/RunUAT.sh BuildCookRun -project="$PWD/Blocks.uproject" -platform=Linux -clientconfig=Shipping -cook -allmaps -build -stage -pak -archive -archivedirectory="/home/unreal/out"
 
 RUN sudo apt-get update && sudo apt-get -y install git build-essential cmake python unzip python-jinja2 python-empy python-pip && sudo rm -rf /var/lib/apt/lists/*
 RUN sudo pip install catkin_pkg

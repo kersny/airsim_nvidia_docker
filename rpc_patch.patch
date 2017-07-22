@@ -1,0 +1,17 @@
+diff --git a/lib/rpc/this_handler.cc b/lib/rpc/this_handler.cc
+index 2479310..f969a48 100644
+--- a/lib/rpc/this_handler.cc
++++ b/lib/rpc/this_handler.cc
+@@ -1,5 +1,11 @@
+ #include "rpc/this_handler.h"
+
++extern "C" int __cxa_thread_atexit(void (*func)(), void *obj,
++                                   void *dso_symbol) {
++  int __cxa_thread_atexit_impl(void (*)(), void *, void *);
++  return __cxa_thread_atexit_impl(func, obj, dso_symbol);
++}
++
+ namespace rpc {
+
+ this_handler_t &this_handler() {
+
